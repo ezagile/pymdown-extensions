@@ -36,7 +36,8 @@ try:
 except ImportError:  # pragma: no cover
     pygments = False
 
-CODE_WRAP = '<pre%s%s><code%s>%s</code></pre>'
+CODE_WRAP = '<pre%s><code%s%s%s>%s</code></pre>'
+CODE_WRAP_ON_PRE = '<pre%s%s%s><code>%s</code></pre>'
 CLASS_ATTR = ' class="%s"'
 ID_ATTR = ' id="%s"'
 DEFAULT_CONFIG = {
@@ -87,6 +88,10 @@ DEFAULT_CONFIG = {
     'legacy_no_wrap_code': [
         False,
         'Do not wrap block code under pre elements with code elements - Default: False'
+    ],
+    'code_attr_on_pre': [
+        False,
+        "Attach attribute list values on pre element instead of code element - Default: False"
     ],
     '_enabled': [
         True,
@@ -184,7 +189,7 @@ class Highlight(object):
     def __init__(
         self, guess_lang=True, pygments_style='default', use_pygments=True,
         noclasses=False, extend_pygments_lang=None, linenums=None, linenums_special=-1,
-        linenums_style='table', linenums_class='linenums', wrapcode=True
+        linenums_style='table', linenums_class='linenums', wrapcode=True, code_attr_on_pre=False
     ):
         """Initialize."""
 
@@ -197,6 +202,7 @@ class Highlight(object):
         self.linenums_special = linenums_special
         self.linenums_class = linenums_class
         self.wrapcode = wrapcode
+        self.code_attr_on_pre = code_attr_on_pre
 
         if extend_pygments_lang is None:  # pragma: no cover
             extend_pygments_lang = []
@@ -249,10 +255,12 @@ class Highlight(object):
 
     def highlight(
         self, src, language, css_class='highlight', hl_lines=None,
-        linestart=-1, linestep=-1, linespecial=-1, inline=False, classes=None, id_value=''
+        linestart=-1, linestep=-1, linespecial=-1, inline=False, classes=None, id_value='', attrs=None
     ):
         """Highlight code."""
 
+        if attrs is None:
+            attrs = {}
         class_names = classes[:] if classes else []
         linenums_enabled = (self.linenums or (self.linenums is not False and linestart >= 0)) and not inline > 0
 
@@ -300,33 +308,41 @@ class Highlight(object):
             code = highlight(src, lexer, formatter)
             if inline:
                 class_str = css_class
+                attr_str = ''
+                id_str = ''
         elif inline:
             # Format inline code for a JavaScript Syntax Highlighter by specifying language.
             code = self.escape(src)
-            classes = class_names + ([css_class] if css_class else [])
+            if css_class:
+                class_names.insert(0, css_class)
             if language:
-                classes.append('language-%s' % language)
-            class_str = ''
-            if len(classes):
-                class_str = ' '.join(classes)
+                class_names.insert(0, 'language-{}'.format(language))
+            class_str = ' '.join(class_names) if class_names else ''
+            id_str = id_value
         else:
             # Format block code for a JavaScript Syntax Highlighter by specifying language.
-            classes = class_names
-            linenums = self.linenums_style if linenums_enabled else False
+            if self.code_attr_on_pre and css_class:
+                class_names.insert(0, css_class)
             if language:
-                classes.append('language-%s' % language)
-            class_str = ''
-            if linenums:
-                classes.append(self.linenums_class)
-            if classes:
-                class_str = CLASS_ATTR % ' '.join(classes)
-            if id_value:
-                id_value = ID_ATTR % id_value
-            highlight_class = (CLASS_ATTR % css_class) if css_class else ''
-            code = CODE_WRAP % (id_value, highlight_class, class_str, self.escape(src))
+                class_names.insert(0, 'language-%s' % language)
+            class_str = CLASS_ATTR % ' '.join(class_names) if class_names else ''
+            id_str = ID_ATTR % id_value if id_value else ''
+            attr_str = ' ' + ' '.join('{k}="{v}"'.format(k=k, v=v) for k, v in attrs.items()) if attrs else ''
+            if not self.code_attr_on_pre:
+                highlight_class = (CLASS_ATTR % css_class) if css_class else ''
+                code = CODE_WRAP % (highlight_class, id_str, class_str, attr_str, self.escape(src))
+            else:
+                code = CODE_WRAP_ON_PRE % (id_str, class_str, attr_str, self.escape(src))
 
         if inline:
-            el = etree.Element('code', {'class': class_str} if class_str else {})
+            attributes = {}
+            if class_str:
+                attributes['class'] = class_str
+            if id_str:
+                attributes['id'] = id_str
+            for k, v in attrs:
+                attributes[k] = v
+            el = etree.Element('code', attributes)
             el.text = code
             return el
         else:
@@ -364,7 +380,8 @@ class HighlightTreeprocessor(Treeprocessor):
                     linenums_special=self.config['linenums_special'],
                     linenums_class=self.config['linenums_class'],
                     extend_pygments_lang=self.config['extend_pygments_lang'],
-                    wrapcode=not self.config['legacy_no_wrap_code']
+                    wrapcode=not self.config['legacy_no_wrap_code'],
+                    code_attr_on_pre=self.config['code_attr_on_pre']
                 )
                 placeholder = self.md.htmlStash.store(
                     code.highlight(
